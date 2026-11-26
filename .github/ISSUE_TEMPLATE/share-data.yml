@@ -1,0 +1,32 @@
+name: Share Quest Ledger data
+description: Paste the text from the Share data window in Quest Ledger.
+title: "Quest data"
+labels: ["data-submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping complete the Quest Ledger quest database!
+
+        **In game:** click **Share data** in the Quest Ledger window (or type `/ql export`), press **Ctrl+C**, then paste the text below with **Ctrl+V**.
+
+        **Privacy:** like every GitHub issue, this one is public and shows your GitHub username. The export text itself contains no character, realm, account or quest names, only quest IDs, levels, XP, money and reward item IDs. Please don't add anything else, such as character names or screenshots. Only the quest numbers are stored; the rest of this issue is not saved anywhere.
+  - type: textarea
+    id: export
+    attributes:
+      label: Export text
+      description: Starts with QLX1 and ends with an END line. Paste it exactly as copied; you can paste several exports one after another.
+      placeholder: |
+        QLX1 addon=1.5.0 client=16001 locale=enUS
+        Q783 l=2 x=85@1 r=6948
+        END n=1 sum=1234
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Permission
+      options:
+        - label: I agree that this data may be published in this repository and included in Quest Ledger.
+          required: true

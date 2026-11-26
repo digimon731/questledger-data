@@ -1,0 +1,117 @@
+name: Data submission
+
+# Every issue that contains a Quest Ledger export is checked automatically and gets a reply.
+# A maintainer adds the "approved" label to merge it into the shared database.
+#
+# Security: the issue text is never put into a command line or the log. It is read from the
+# event file into body.txt and parsed by scripts/submission.ps1, which only keeps numbers.
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: >-
+      (github.event.action == 'opened' || github.event.action == 'edited') &&
+      contains(github.event.issue.body, 'QLX') &&
+      !contains(github.event.issue.labels.*.name, 'merged')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    concurrency:
+      group: validate-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE: ${{ github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the submission
+        run: jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/body.txt"
+
+      - name: Validate
+        shell: pwsh
+        run: >-
+          ./scripts/submission.ps1 -Mode validate
+          -BodyFile "$env:RUNNER_TEMP/body.txt"
+          -CommentFile "$env:RUNNER_TEMP/comment.md"
+          -ResultFile "$env:RUNNER_TEMP/result.txt"
+
+      - name: Reply and label
+        run: |
+          gh label create data-submission --color 1d76db --description "Quest Ledger data" --force
+          gh label create valid --color 0e8a16 --description "Checked: ready for review" --force
+          gh label create invalid --color d93f0b --description "No readable data" --force
+          gh label create approved --color 5319e7 --description "Maintainer: merge this submission" --force
+          gh label create merged --color 6f42c1 --description "Added to the database" --force
+          gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
+          if [ "$(cat "$RUNNER_TEMP/result.txt")" = "valid" ]; then
+            gh issue edit "$ISSUE" --add-label data-submission,valid --remove-label invalid
+          else
+            gh issue edit "$ISSUE" --add-label data-submission,invalid --remove-label valid
+          fi
+
+  merge:
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'approved' &&
+      !contains(github.event.issue.labels.*.name, 'merged')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    concurrency:
+      group: merge-data
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE: ${{ github.event.issue.number }}
+      SENDER: ${{ github.event.sender.login }}
+    steps:
+      - name: Check who approved
+        run: |
+          permission=$(gh api "repos/$GH_REPO/collaborators/$SENDER/permission" --jq .permission)
+          case "$permission" in
+            admin|maintain|write) ;;
+            *) echo "Only maintainers can approve submissions."; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+
+      - name: Read the submission
+        run: jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/body.txt"
+
+      - name: Merge
+        shell: pwsh
+        run: >-
+          ./scripts/submission.ps1 -Mode merge
+          -BodyFile "$env:RUNNER_TEMP/body.txt"
+          -CommentFile "$env:RUNNER_TEMP/comment.md"
+          -ResultFile "$env:RUNNER_TEMP/result.txt"
+
+      - name: Commit
+        run: |
+          if [ "$(cat "$RUNNER_TEMP/result.txt")" != "merged" ]; then
+            gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
+            gh issue edit "$ISSUE" --remove-label approved
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add data/observations.txt data/SharedData.lua
+          if git diff --cached --quiet; then
+            echo "Nothing new."
+          else
+            git commit -m "Add data submission #$ISSUE"
+            git push
+          fi
+          gh issue comment "$ISSUE" --body-file "$RUNNER_TEMP/comment.md"
+          gh issue edit "$ISSUE" --add-label merged --remove-label approved,valid
+          gh issue close "$ISSUE" --reason completed
