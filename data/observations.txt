@@ -1,2 +1,5 @@
 # Quest Ledger shared observations: <quest ID> <field> <value> <times reported>
 # Fields: l level, g group size, x XP@player level, m money (copper), r rewards, c reward choices, f faction (A/H)
+1 l 1 1
+1 x 10@1 1
+1 m 1 1

@@ -2,4 +2,5 @@
 -- Do not edit by hand: changes are overwritten by the next submission.
 local _, ns = ...
 ns.SharedQuests = {
+[1]={lvl=1,xp=10,xpLvl=1,money=1},
 }
