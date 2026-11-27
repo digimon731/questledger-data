@@ -12,7 +12,7 @@ The addon cannot reach the internet, so data is shared by copy and paste. Approv
 The submission is checked automatically within a minute and gets a reply. If something is wrong, edit the issue and paste the text again: it is checked again.
 
 ## Privacy
-- **What the export contains:** quest IDs, quest level, suggested group size, XP with the player level it was seen at, money, reward item IDs and counts, and which faction (A/H) saw the quest. The header line has the addon version, the game client version and the client language.
+- **What the export contains:** quest IDs, quest level, suggested group size, XP with the player level it was seen at, money (and the money paid at max level), the player level of the last turn-in with the XP and money it paid, reward item IDs and counts, and which faction (A/H) saw the quest. The header line has the addon version, the game client version and the client language.
 - **What it does not contain:** character, realm, guild or account names, quest names, or anything about your character apart from its level when the XP was seen.
 - **What is stored:** only the numbers above, combined with every other submission in [data/observations.txt](data/observations.txt). Header details and everything else in the issue are not stored.
 - **GitHub issues are public** and show the GitHub username of whoever opens them. If you pasted something private by mistake, edit the issue to remove it and ask for the issue to be deleted.

@@ -5,7 +5,7 @@ Quest Ledger data submissions.
   merge     Validates, then adds the records to data/observations.txt and rebuilds data/SharedData.lua.
   build     Only rebuilds data/SharedData.lua from data/observations.txt.
 
-Privacy: only the parsed numbers (quest ID, level, group size, XP, money, item IDs, faction letter)
+Privacy: only the parsed numbers (quest ID, quest and player level, group size, XP, money, item IDs, faction letter)
 are ever stored. Nothing else from the issue is saved, and the reply never quotes the issue text,
 so anything a player pasted by mistake is not repeated anywhere.
 
@@ -35,7 +35,7 @@ $MaxItemID = 9999999
 $MaxCount = 1000
 $MaxItems = 12
 $MaxQuests = 5000         # per submission
-$Fields = 'l', 'g', 'x', 'm', 'r', 'c', 'f'
+$Fields = 'l', 'g', 'x', 'm', 'n', 't', 'r', 'c', 'f'
 
 function Get-Checksum([string[]] $lines) {
     $sum = 0
@@ -77,7 +77,7 @@ function ConvertFrom-QuestLine([string] $line) {
     if (-not (Test-Int $id 1 $MaxQuestID)) { return $null }
     $rec = [ordered]@{ id = [int]$id }
     for ($t = 1; $t -lt $tokens.Count; $t++) {
-        if ($tokens[$t] -notmatch '^([lgxmrcf])=(\S+)$') { return $null }
+        if ($tokens[$t] -notmatch '^([lgxmntrcf])=(\S+)$') { return $null }
         $key = $Matches[1]; $value = $Matches[2]
         if ($rec.Contains($key)) { return $null }
         switch ($key) {
@@ -85,6 +85,20 @@ function ConvertFrom-QuestLine([string] $line) {
             'g' { if (-not (Test-Int $value 1 $MaxGroup)) { return $null }; $rec[$key] = [string][int]$value }
             'm' { if (-not (Test-Int $value 1 $MaxMoney)) { return $null }; $rec[$key] = [string][int]$value }
             'f' { if ($value -cnotmatch '^(A|H|AH)$') { return $null }; $rec[$key] = $value }
+            'n' {
+                # Money paid at max level (XP turned into gold), with that level.
+                if ($value -notmatch '^(\d{1,8})@(\d{1,2})$') { return $null }
+                $money = $Matches[1]; $at = $Matches[2]
+                if (-not (Test-Int $money 1 $MaxMoney) -or -not (Test-Int $at 1 $MaxLevel)) { return $null }
+                $rec[$key] = '{0}@{1}' -f [int]$money, [int]$at
+            }
+            't' {
+                # A turn-in: player level, XP received, money received (either may be 0).
+                if ($value -notmatch '^(\d{1,2}):(\d{1,6}):(\d{1,8})$') { return $null }
+                $at = $Matches[1]; $xp = $Matches[2]; $money = $Matches[3]
+                if (-not (Test-Int $at 1 $MaxLevel) -or -not (Test-Int $xp 0 $MaxXP) -or -not (Test-Int $money 0 $MaxMoney)) { return $null }
+                $rec[$key] = '{0}:{1}:{2}' -f [int]$at, [int]$xp, [int]$money
+            }
             'x' {
                 if ($value -notmatch '^(\d{1,6})(?:@(\d{1,2}))?$') { return $null }
                 $xp = $Matches[1]; $at = $Matches[2]
@@ -104,7 +118,8 @@ function ConvertFrom-QuestLine([string] $line) {
         }
     }
     # The addon only exports quests with XP, money or rewards.
-    if (-not ($rec.Contains('x') -or $rec.Contains('m') -or $rec.Contains('r') -or $rec.Contains('c'))) { return $null }
+    if (-not ($rec.Contains('x') -or $rec.Contains('m') -or $rec.Contains('n') -or $rec.Contains('t') -or
+              $rec.Contains('r') -or $rec.Contains('c'))) { return $null }
     return $rec
 }
 
@@ -170,7 +185,7 @@ function Read-Observations {
     $obs = @{}
     if (-not (Test-Path $ObservationsPath)) { return $obs }
     foreach ($line in [IO.File]::ReadAllLines($ObservationsPath)) {
-        if ($line -match '^(\d+) ([lgxmrcf]) (\S+) (\d+)$') {
+        if ($line -match '^(\d+) ([lgxmntrcf]) (\S+) (\d+)$') {
             $id = [int]$Matches[1]
             if (-not $obs.ContainsKey($id)) { $obs[$id] = @{} }
             if (-not $obs[$id].ContainsKey($Matches[2])) { $obs[$id][$Matches[2]] = @{} }
@@ -183,7 +198,8 @@ function Read-Observations {
 function Write-Observations($obs) {
     $out = New-Object Collections.ArrayList
     [void]$out.Add('# Quest Ledger shared observations: <quest ID> <field> <value> <times reported>')
-    [void]$out.Add('# Fields: l level, g group size, x XP@player level, m money (copper), r rewards, c reward choices, f faction (A/H)')
+    [void]$out.Add('# Fields: l level, g group size, x XP@player level, m money (copper), n money at max level@level,')
+    [void]$out.Add('#         t turn-in level:XP:money, r rewards, c reward choices, f faction (A/H)')
     foreach ($id in ($obs.Keys | Sort-Object)) {
         foreach ($f in $Fields) {
             if (-not $obs[$id].ContainsKey($f)) { continue }
@@ -268,6 +284,15 @@ function Write-Lua($obs) {
             if ($at) { $parts += 'xpLvl=' + $at }
         }
         if ($o.ContainsKey('m')) { $parts += 'money=' + (Get-Winner $o['m']) }
+        if ($o.ContainsKey('n')) {
+            # Reports from the highest max level win (the cap could rise), then the most reported.
+            $top = ($o['n'].Keys | ForEach-Object { [int]($_ -split '@')[1] } | Measure-Object -Maximum).Maximum
+            $subset = @{}
+            foreach ($v in $o['n'].Keys) { if ([int]($v -split '@')[1] -eq $top) { $subset[$v] = $o['n'][$v] } }
+            $money, $at = (Get-Winner $subset) -split '@'
+            $parts += 'moneyMax=' + $money
+            $parts += 'moneyMaxLvl=' + $at
+        }
         if ($o.ContainsKey('r')) { $parts += 'rew=' + (ConvertTo-LuaItems (Get-Winner $o['r'])) }
         if ($o.ContainsKey('c')) { $parts += 'choice=' + (ConvertTo-LuaItems (Get-Winner $o['c'])) }
         if ($o.ContainsKey('f')) {
