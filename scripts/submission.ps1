@@ -307,6 +307,63 @@ function Write-Lua($obs) {
     [IO.File]::WriteAllText($LuaPath, (($out -join "`n") + "`n"))
 }
 
+# Money checks for the maintainer, above all for max level, where XP is paid as gold:
+#   a turn-in below max level pays the quest's own money (m),
+#   a turn-in at max level pays the max-level money (n), which is at least m,
+#   and (n - m) / XP at max level is a gold-per-XP rate that should be alike for every quest.
+# Returns warnings and the rates found.
+$MaxPlayerLevel = 60
+function Get-XPAtLevel([int] $fullXP, [int] $questLevel, [int] $playerLevel) {
+    $diff = $playerLevel - $questLevel
+    if ($diff -le 5) { return $fullXP }
+    $factor = @{ 6 = 0.8; 7 = 0.6; 8 = 0.4; 9 = 0.2 }[$diff]
+    if ($null -eq $factor) { $factor = 0.1 }
+    return [math]::Floor($fullXP * $factor / 5 + 0.5) * 5
+}
+
+function Get-MoneyChecks($records) {
+    $warnings = New-Object Collections.ArrayList
+    $rates = New-Object Collections.ArrayList
+    foreach ($rec in $records.Values) {
+        $id = $rec.id
+        $m = $null; $n = $null; $nAt = $null
+        if ($rec.Contains('m')) { $m = [long]$rec['m'] }
+        if ($rec.Contains('n')) { $parts = $rec['n'] -split '@'; $n = [long]$parts[0]; $nAt = [int]$parts[1] }
+        if ($null -ne $n -and $null -ne $m -and $n -lt $m) {
+            [void]$warnings.Add("Quest ${id}: money at max level ($n) is lower than the quest's own money ($m).")
+        }
+        if ($rec.Contains('t')) {
+            $parts = $rec['t'] -split ':'
+            $tLevel = [int]$parts[0]; $tMoney = [long]$parts[2]
+            if ($null -ne $nAt -and $tLevel -eq $nAt -and $tMoney -ne $n) {
+                [void]$warnings.Add("Quest ${id}: the turn-in at level $tLevel paid $tMoney, but the max-level money is $n.")
+            }
+            if ($tLevel -lt $MaxPlayerLevel -and $null -ne $m -and $tMoney -gt 0 -and $tMoney -ne $m) {
+                [void]$warnings.Add("Quest ${id}: the turn-in at level $tLevel paid $tMoney, but the quest's own money is $m.")
+            }
+            if ($tLevel -ge $MaxPlayerLevel -and $null -eq $n -and $tMoney -gt 0) {
+                [void]$warnings.Add("Quest ${id}: a turn-in at level $tLevel has no max-level money.")
+            }
+        }
+        # The rate needs the full XP: an XP report from no more than 5 levels above the quest.
+        if ($null -ne $n -and $rec.Contains('x') -and $rec.Contains('l')) {
+            $parts = $rec['x'] -split '@'
+            $questLevel = [int]$rec['l']
+            if ($parts.Count -eq 2 -and [int]$parts[1] -le $questLevel + 5) {
+                $xpAtMax = Get-XPAtLevel ([int]$parts[0]) $questLevel $nAt
+                if ($xpAtMax -ge 100) {
+                    $rate = ($n - $(if ($null -ne $m) { $m } else { 0 })) / $xpAtMax
+                    [void]$rates.Add($rate)
+                    if ($rate -le 0 -or $rate -gt 50) {
+                        [void]$warnings.Add([string]::Format([Globalization.CultureInfo]::InvariantCulture, "Quest {0}: max-level money gives {1:0.0} copper per XP, which is implausible.", $id, $rate))
+                    }
+                }
+            }
+        }
+    }
+    return @{ Warnings = $warnings; Rates = $rates }
+}
+
 function Write-Reply([string[]] $lines, [string] $result) {
     [IO.File]::WriteAllText($CommentFile, (($lines -join "`n") + "`n"))
     [IO.File]::WriteAllText($ResultFile, $result)
@@ -344,6 +401,23 @@ if ($Mode -eq 'validate') {
     [void]$reply.Add("**Thank you!** This submission has **$count** valid $noun ($details).")
     [void]$reply.Add('')
     [void]$reply.Add('A maintainer will review it and add it to the shared database. Only the quest numbers are stored; nothing else from this issue is saved.')
+    $withMoney = @($sub.Records.Values | Where-Object { $_.Contains('m') -or $_.Contains('n') -or $_.Contains('t') }).Count
+    if ($withMoney -gt 0) {
+        $checks = Get-MoneyChecks $sub.Records
+        [void]$reply.Add('')
+        [void]$reply.Add("**Money checks** ($withMoney quests with money):")
+        if ($checks.Rates.Count -gt 0) {
+            $sorted = @($checks.Rates | Sort-Object)
+            $median = $sorted[[math]::Floor(($sorted.Count - 1) / 2)]
+            [void]$reply.Add([string]::Format([Globalization.CultureInfo]::InvariantCulture, "- Max level: about {0:0.0} copper per XP, from {1} quests (range {2:0.0} to {3:0.0}).", $median, $sorted.Count, $sorted[0], $sorted[-1]))
+        }
+        if ($checks.Warnings.Count -eq 0) {
+            [void]$reply.Add('- The money values agree with each other.')
+        } else {
+            foreach ($w in @($checks.Warnings | Select-Object -First 15)) { [void]$reply.Add("- $w") }
+            if ($checks.Warnings.Count -gt 15) { [void]$reply.Add("- ...and $($checks.Warnings.Count - 15) more.") }
+        }
+    }
     if ($problems.Count -gt 0) {
         [void]$reply.Add('')
         [void]$reply.Add('Some parts were skipped:')
